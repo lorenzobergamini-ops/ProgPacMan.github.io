@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pac-Man compatto</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      background: #000;
+      color: #fff;
+      user-select: none;
+      margin: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      min-height: 100vh;
+    }
+    canvas {
+      background: #000;
+      border: 4px solid #222;
+      image-rendering: pixelated;
+      margin-bottom: 1rem;
+      display: block;
+      margin-left: auto;
+      margin-right: auto;
+    }
+  </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen">
+  <h1 class="text-3xl font-bold mb-4 text-yellow-400">Pac-Man Compatto</h1>
+  <div class="flex flex-col items-center">
+    <div class="flex gap-4 mb-2 w-full justify-between max-w-md">
+      <div class="text-lg">Punteggio: <span id="score" class="font-bold">0</span></div>
+      <div class="text-lg">Vite: <span id="lives" class="font-bold">3</span></div>
+      <div class="text-lg">Power-Up: <span id="powerup-timer" class="font-bold">0</span>s</div>
+    </div>
+    <canvas id="game" width="408" height="360" class="rounded-lg shadow-lg"></canvas>
+    <div class="flex gap-4 mt-2">
+      <button id="restartBtn" class="bg-yellow-400 text-black font-bold px-4 py-2 rounded shadow hover:bg-yellow-300 transition">Ricomincia</button>
+    </div>
+    <div id="message" class="mt-4 text-2xl font-bold text-center hidden"></div>
+  </div>
+  <script>
+    const originalMap = [
+      "#################",
+      "#o.............o#",
+      "#.###.###.###..#",
+      "#.#.......#.#..#",
+      "#.###.#.###.#..#",
+      "#..............#",
+      "###.#.###.#.####",
+      "#...#.....#...P#",
+      "###.#.###.#.####",
+      "#..............#",
+      "#.###.#.###.#..#",
+      "#.#.......#.#..#",
+      "#.###.###.###..#",
+      "#o.............o#",
+      "#################"
+    ];
+
+    const tileSize = 24;
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const scoreEl = document.getElementById('score');
+    const livesEl = document.getElementById('lives');
+    const powerUpTimerEl = document.getElementById('powerup-timer');
+    const restartBtn = document.getElementById('restartBtn');
+    const messageEl = document.getElementById('message');
+
+    let rawMap;
+    let score;
+    let lives;
+    let powerUpActive;
+    let powerUpTimer;
+    let gameOver;
+    let gameWon;
+
+    let pacman;
+    let ghosts;
+    let animationId;
+
+    function resetMap() {
+      rawMap = originalMap.map(row => row.split(''));
+    }
+
+    function resetPositions() {
+      pacman = { x: 0, y: 0, dir: {x: 0, y: 0}, nextDir: {x: 0, y: 0} };
+
+      for(let y=0; y<rawMap.length; y++) {
+        for(let x=0; x<rawMap[y].length; x++) {
+          if(rawMap[y][x] === 'P') {
+            pacman.x = x;
+            pacman.y = y;
+            rawMap[y][x] = ' ';
+          }
+        }
+      }
+
+      ghosts = [
+        { x: 8, y: 6, color: 'red', dir: {x: 0, y: 0}, speedCounter: 0 },
+        { x: 8, y: 8, color: 'pink', dir: {x: 0, y: 0}, speedCounter: 0 },
+        { x: 7, y: 7, color: 'cyan', dir: {x: 0, y: 0}, speedCounter: 0 },
+        { x: 9, y: 7, color: 'orange', dir: {x: 0, y: 0}, speedCounter: 0 },
+      ];
+    }
+
+    function isWall(x, y) {
+      if (y < 0 || y >= rawMap.length || x < 0 || x >= rawMap[0].length) return true;
+      return rawMap[y][x] === '#';
+    }
+
+    function drawMap() {
+      for(let y=0; y<rawMap.length; y++) {
+        for(let x=0; x<rawMap[y].length; x++) {
+          const tile = rawMap[y][x];
+          const px = x*tileSize;
+          const py = y*tileSize;
+
+          ctx.fillStyle = '#000';
+          ctx.fillRect(px, py, tileSize, tileSize);
+
+          if(tile === '#') {
+            ctx.fillStyle = '#facc15';
+            ctx.fillRect(px, py, tileSize, tileSize);
+          } else if(tile === '.') {
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(px+tileSize/2, py+tileSize/2, 3, 0, Math.PI*2);
+            ctx.fill();
+          } else if(tile === 'o') {
+            ctx.fillStyle = '#ef4444';
+            ctx.beginPath();
+            ctx.arc(px+tileSize/2, py+tileSize/2, 7, 0, Math.PI*2);
+            ctx.fill();
+          }
+        }
+      }
+    }
+
+    function drawPacman() {
+      const px = pacman.x*tileSize + tileSize/2;
+      const py = pacman.y*tileSize + tileSize/2;
+      ctx.fillStyle = 'yellow';
+
+      ctx.beginPath();
+      const mouthAngle = 0.25 + 0.25 * Math.sin(Date.now()/150);
+      const startAngle = mouthAngle;
+      const endAngle = 2 * Math.PI - mouthAngle;
+      ctx.moveTo(px, py);
+      ctx.arc(px, py, tileSize/2 - 2, startAngle, endAngle);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawGhosts() {
+      ghosts.forEach(g => {
+        const px = g.x*tileSize + tileSize/2;
+        const py = g.y*tileSize + tileSize/2;
+
+        ctx.fillStyle = powerUpActive ? '#60a5fa' : g.color;
+        ctx.beginPath();
+        ctx.arc(px, py, tileSize/2 - 2, Math.PI, 0, false);
+        ctx.lineTo(px + tileSize/2 - 2, py + tileSize/2 - 4);
+        ctx.lineTo(px - tileSize/2 + 2, py + tileSize/2 - 4);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = 'white';
+        ctx.beginPath();
+        ctx.ellipse(px - 5, py - 5, 5, 8, 0, 0, 2 * Math.PI);
+        ctx.ellipse(px + 5, py - 5, 5, 8, 0, 0, 2 * Math.PI);
+        ctx.fill();
+
+        ctx.fillStyle = 'black';
+        ctx.beginPath();
+        ctx.ellipse(px - 5 + g.dir.x*2, py - 5 + g.dir.y*2, 2.5, 3, 0, 0, 2 * Math.PI);
+        ctx.ellipse(px + 5 + g.dir.x*2, py - 5 + g.dir.y*2, 2.5, 3, 0, 0, 2 * Math.PI);
+        ctx.fill();
+      });
+    }
+
+    function canMoveTo(x, y) {
+      return !isWall(x, y);
+    }
+
+    function movePacman() {
+      if (!movePacman.frame) movePacman.frame = 0;
+      movePacman.frame = (movePacman.frame + 1) % 4;
+      if (movePacman.frame !== 0) return;
+
+      const nx = pacman.x + pacman.nextDir.x;
+      const ny = pacman.y + pacman.nextDir.y;
+      if(canMoveTo(nx, ny)) {
+        pacman.dir.x = pacman.nextDir.x;
+        pacman.dir.y = pacman.nextDir.y;
+      }
+
+      const mx = pacman.x + pacman.dir.x;
+      const my = pacman.y + pacman.dir.y;
+      if(canMoveTo(mx, my)) {
+        pacman.x = mx;
+        pacman.y = my;
+      }
+    }
+
+    function moveGhosts() {
+      ghosts.forEach(g => {
+        g.speedCounter = (g.speedCounter + 1) % 12;
+        if(g.speedCounter !== 0) return;
+
+        const nx = g.x + g.dir.x;
+        const ny = g.y + g.dir.y;
+        if(!canMoveTo(nx, ny) || Math.random() < 0.2) {
+          const directions = [
+            {x: 1, y: 0},
+            {x: -1, y: 0},
+            {x: 0, y: 1},
+            {x: 0, y: -1},
+          ];
+          let possibile = directions.filter(d => canMoveTo(g.x + d.x, g.y + d.y));
+          if(possibile.length === 0) return;
+          const scelta = possibile[Math.floor(Math.random() * possibile.length)];
+          g.dir = scelta;
+        } else {
+          g.x += g.dir.x;
+          g.y += g.dir.y;
+        }
+      });
+    }
+
+    function checkPickup() {
+      const tile = rawMap[pacman.y][pacman.x];
+      if(tile === '.') {
+        rawMap[pacman.y][pacman.x] = ' ';
+        score += 10;
+      } else if(tile === 'o') {
+        rawMap[pacman.y][pacman.x] = ' ';
+        score += 50;
+        powerUpActive = true;
+        powerUpTimer = 240;
+      }
+    }
+
+    function checkGhostCollision() {
+      for(let g of ghosts) {
+        if(g.x === pacman.x && g.y === pacman.y) {
+          if(powerUpActive) {
+            score += 200;
+            g.x = 8; g.y = 6;
+            g.dir = {x:0,y:0};
+          } else {
+            lives--;
+            if(lives <= 0) {
+              gameOver = true;
+              showMessage("Game Over!<br>Punteggio: " + score);
+            } else {
+              resetPositions();
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    function checkVictory() {
+      for(let row of rawMap) {
+        for(let tile of row) {
+          if(tile === '.' || tile === 'o') {
+            return false;
+          }
+        }
+      }
+      gameWon = true;
+      showMessage("Hai vinto!<br>Punteggio: " + score);
+      return true;
+    }
+
+    function showMessage(msg) {
+      messageEl.innerHTML = msg + '<br><button id="msgRestart" class="mt-4 bg-yellow-400 text-black font-bold px-4 py-2 rounded shadow hover:bg-yellow-300 transition">Nuova partita</button>';
+      messageEl.classList.remove('hidden');
+      document.getElementById('msgRestart').onclick = () => {
+        messageEl.classList.add('hidden');
+        startNewGame();
+      };
+    }
+
+    function hideMessage() {
+      messageEl.classList.add('hidden');
+    }
+
+    function gameLoop() {
+      if(gameOver || gameWon) return;
+
+      movePacman();
+      checkPickup();
+
+      moveGhosts();
+
+      checkGhostCollision();
+
+      if(powerUpActive) {
+        powerUpTimer--;
+        if(powerUpTimer <= 0) {
+          powerUpActive = false;
+          powerUpTimer = 0;
+        }
+      }
+
+      if(checkVictory()) return;
+
+      drawMap();
+      drawPacman();
+      drawGhosts();
+
+      scoreEl.textContent = score;
+      livesEl.textContent = lives;
+      powerUpTimerEl.textContent = powerUpActive ? Math.ceil(powerUpTimer / 60) : 0;
+
+      animationId = requestAnimationFrame(gameLoop);
+    }
+
+    function restartGame() {
+      cancelAnimationFrame(animationId);
+      resetMap();
+      resetPositions();
+
+      powerUpActive = false;
+      powerUpTimer = 0;
+      gameOver = false;
+      gameWon = false;
+
+      hideMessage();
+
+      drawMap();
+      drawPacman();
+      drawGhosts();
+
+      scoreEl.textContent = score;
+      livesEl.textContent = lives;
+      powerUpTimerEl.textContent = 0;
+
+      animationId = requestAnimationFrame(gameLoop);
+    }
+
+    function startNewGame() {
+      score = 0;
+      lives = 3;
+      restartGame();
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if(gameOver || gameWon) return;
+      switch(e.key) {
+        case 'ArrowUp':
+        case 'w':
+        case 'W':
+          pacman.nextDir = {x:0, y:-1};
+          break;
+        case 'ArrowDown':
+        case 's':
+        case 'S':
+          pacman.nextDir = {x:0, y:1};
+          break;
+        case 'ArrowLeft':
+        case 'a':
+        case 'A':
+          pacman.nextDir = {x:-1, y:0};
+          break;
+        case 'ArrowRight':
+        case 'd':
+        case 'D':
+          pacman.nextDir = {x:1, y:0};
+          break;
+      }
+    });
+
+    restartBtn.addEventListener('click', () => {
+      restartGame();
+    });
+
+    startNewGame();
+  </script>
+</body>
+</html>
